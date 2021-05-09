@@ -17,33 +17,39 @@ var (
 	commentShow = false
 )
 
-func init() {
+func main() {
 	flag.StringVar(&fileName, "fileName", "", "fileName")
 	flag.StringVar(&funcName, "funcName", "UpdateAmount", "funcName")
 	flag.BoolVar(&commentShow, "commentShow", commentShow, "是否输出有无注释信息")
-}
-func main() {
 
 	flag.Parse()
-	if len(fileName) == 0 {
-		fileName = "/Users/mac/go/src/bioption/round/pool.go"
+
+	if fileName == `` {
+		panic(`fileName 不能为空`)
 	}
 
-	data, err := ioutil.ReadFile(fileName)
-	if err != nil {
-		panic("文件错误" + err.Error())
+	var (
+		file    *ast.File
+		content []byte
+		err     error
+		fileSet *token.FileSet
+	)
+
+	if content, err = ioutil.ReadFile(fileName); err != nil {
+		panic(fmt.Sprintf(`读取文件[%s]错误[%s]`, fileName, err.Error()))
 	}
-	fset := token.NewFileSet() // positions are relative to fset
-	f, err := parser.ParseFile(fset, funcName, string(data), parser.ParseComments)
-	if err != nil {
+
+	fileSet = token.NewFileSet() // positions are relative to fileSet
+
+	if file, err = parser.ParseFile(fileSet, funcName, string(content), parser.ParseComments); err != nil {
 		panic("解析错误" + err.Error())
 	}
-	if funcName != "" {
-		FilterFunc(f, fset, string(data), funcName)
-	} else {
-		FilterFunc(f, fset, string(data))
-	}
 
+	if funcName != "" {
+		FilterFunc(file, fileSet, string(content), funcName)
+	} else {
+		FilterFunc(file, fileSet, string(content))
+	}
 }
 
 type Func struct {
@@ -57,53 +63,56 @@ func (f Func) String() string {
 	builder := &strings.Builder{}
 	fmt.Fprintf(builder, "/*%s 方法说明\n", f.FuncName)
 	fmt.Fprintf(builder, "\t参数:\n")
+
 	for _, argument := range f.Arguments {
 		fmt.Fprintf(builder, "\t*\t%s\t%s\n", argument.Name, argument.Type)
-
 	}
+
 	fmt.Fprintf(builder, "\t返回值:\n")
+
 	for _, argument := range f.Returns {
 		fmt.Fprintf(builder, "\t*\t%s\t%s\n", argument.Name, argument.Type)
 	}
-	if commentShow{
+
+	if commentShow {
 		fmt.Fprintf(builder, "有注释:[%v]\n", f.Comments)
 	}
+
 	fmt.Fprintf(builder, "*/")
+
 	return builder.String()
 }
 
+// Argument 参数
 type Argument struct {
-	Name string
-	Type string
+	Name string // 名称
+	Type string // 类型
 }
 
-func FilterFunc(file *ast.File, fset *token.FileSet, source string, funcNames ...string) {
+func FilterFunc(file *ast.File, fileSet *token.FileSet, source string, funcNames ...string) {
 	ast.Inspect(file, func(x ast.Node) bool {
 		f, ok := x.(*ast.FuncType)
 		if !ok {
-			
 			return true
 		}
-		cmap := ast.NewCommentMap(fset, file, file.Comments)
-		//spew.Dump(f)
-		//println(len(source),int(f.Pos())+len("func"),f.Params.Opening-1,source[int(f.Pos()-1):f.Params.Opening-1])
-		//println(source[int(f.Pos()):int(f.Pos())+10])
-		//println(source[int(f.Pos())+len("func") : f.Params.Opening-1])
-		if int(f.Pos())+len("func")< int(f.Params.Opening)-1{
+
+		commentMap := ast.NewCommentMap(fileSet, file, file.Comments)
+
+		if int(f.Pos())+len("func") < int(f.Params.Opening)-1 {
 			ft := Func{
 				FuncName:  source[int(f.Pos())+len("func") : f.Params.Opening-1],
 				Arguments: processArguments(f.Params.List, source),
-				Comments:  len(cmap[f]) != 0,
+				Comments:  len(commentMap[f]) != 0,
 			}
-			if f.Results!=nil{
-				ft.Returns= processArguments(f.Results.List, source)
+			if f.Results != nil {
+				ft.Returns = processArguments(f.Results.List, source)
 			}
 
 			if strings.Contains(ft.FuncName, "(") {
 				start := strings.Index(ft.FuncName, ")")
 				ft.FuncName = strings.TrimSpace(ft.FuncName[start+1:])
 			}
-			//println(source[f.Pos()-1:f.End()], f.Func.IsValid())
+
 			if len(funcNames) != 0 {
 				for _, funcName := range funcNames {
 					if strings.TrimSpace(funcName) == ft.FuncName {
@@ -114,7 +123,6 @@ func FilterFunc(file *ast.File, fset *token.FileSet, source string, funcNames ..
 			} else {
 				println(ft.String())
 			}
-
 		}
 		return false
 	})
@@ -127,22 +135,22 @@ func processArguments(fields []*ast.Field, source string) []Argument {
 
 	for _, field := range fields {
 		if len(field.Names) > 0 {
-
 			typeName := source[field.Type.Pos()-1 : field.Type.End()-1]
 
 			if len(typeName) > maxTypeLength {
 				maxTypeLength = len(typeName)
 			}
+
 			for _, name := range field.Names {
 				if len(name.Name) > maxFieldLength {
 					maxFieldLength = len(name.Name)
 				}
+
 				arguments = append(arguments, Argument{
 					Name: name.Name,
 					Type: typeName,
 				})
 			}
-
 		} else {
 			typeName := source[field.Type.Pos()-1 : field.Type.End()-1]
 			if len(typeName) > maxTypeLength {
@@ -157,13 +165,16 @@ func processArguments(fields []*ast.Field, source string) []Argument {
 			})
 		}
 	}
+
 	for i, argument := range arguments {
 		if len(argument.Name) != maxFieldLength {
 			arguments[i].Name += strings.Repeat(" ", maxFieldLength-len(argument.Name))
 		}
+
 		if len(argument.Type) != maxTypeLength {
 			arguments[i].Type += strings.Repeat(" ", maxTypeLength-len(argument.Type))
 		}
 	}
+
 	return arguments
 }
