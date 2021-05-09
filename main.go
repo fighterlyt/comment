@@ -17,6 +17,11 @@ var (
 	commentShow = false
 )
 
+var (
+	// funcKeyWord 函数或者方法关键字
+	funcKeyWord = `func`
+)
+
 func main() {
 	flag.StringVar(&fileName, "fileName", "", "fileName")
 	flag.StringVar(&funcName, "funcName", "UpdateAmount", "funcName")
@@ -30,7 +35,7 @@ func main() {
 
 	var (
 		file    *ast.File
-		content []byte
+		content []byte //代码内容
 		err     error
 		fileSet *token.FileSet
 	)
@@ -52,33 +57,49 @@ func main() {
 	}
 }
 
+// Func 方法或者函数
 type Func struct {
-	FuncName  string
-	Arguments []Argument
-	Returns   []Argument
-	Comments  bool
+	FuncName  string    //名称
+	Arguments Arguments // 参数
+	Returns   Arguments // 返回值
+	Comments  bool      // 是否有注释
 }
 
 func (f Func) String() string {
-	builder := &strings.Builder{}
-	fmt.Fprintf(builder, "/*%s 方法说明\n", f.FuncName)
-	fmt.Fprintf(builder, "\t参数:\n")
-
-	for _, argument := range f.Arguments {
-		fmt.Fprintf(builder, "\t*\t%s\t%s\n", argument.Name, argument.Type)
+	if f.Arguments.maxTypeLength > f.Returns.maxTypeLength {
+		f.Returns.maxTypeLength = f.Arguments.maxTypeLength
+	} else {
+		f.Arguments.maxTypeLength = f.Returns.maxTypeLength
 	}
 
-	fmt.Fprintf(builder, "\t返回值:\n")
+	if f.Arguments.maxFieldLength > f.Returns.maxFieldLength {
+		f.Returns.maxFieldLength = f.Arguments.maxFieldLength
+	} else {
+		f.Arguments.maxFieldLength = f.Returns.maxFieldLength
+	}
 
-	for _, argument := range f.Returns {
-		fmt.Fprintf(builder, "\t*\t%s\t%s\n", argument.Name, argument.Type)
+	f.Arguments.fill()
+	f.Returns.fill()
+
+	builder := &strings.Builder{}
+	builder.WriteString(fmt.Sprintf("/*%s 方法说明\n", f.FuncName))
+	builder.WriteString(fmt.Sprintf("\t参数:\n"))
+
+	for i, argument := range f.Arguments.arguments {
+		builder.WriteString(fmt.Sprintf("\t*\t%s\t%s\t参数%d\n", argument.Name, argument.Type, i+1))
+	}
+
+	builder.WriteString(fmt.Sprintf("\t返回值:\n"))
+
+	for i, argument := range f.Returns.arguments {
+		builder.WriteString(fmt.Sprintf("\t*\t%s\t%s\t返回值%d\n", argument.Name, argument.Type, i+1))
 	}
 
 	if commentShow {
-		fmt.Fprintf(builder, "有注释:[%v]\n", f.Comments)
+		builder.WriteString(fmt.Sprintf("有注释:[%v]\n", f.Comments))
 	}
 
-	fmt.Fprintf(builder, "*/")
+	builder.WriteString(fmt.Sprintf("*/"))
 
 	return builder.String()
 }
@@ -88,19 +109,36 @@ type Argument struct {
 	Name string // 名称
 	Type string // 类型
 }
+type Arguments struct {
+	arguments      []Argument // 参数
+	maxTypeLength  int        // 类型的最大长度
+	maxFieldLength int        // 字段的最大长度
+}
+
+func (a Arguments) fill() {
+	for i, argument := range a.arguments { //这一段是为了对齐，按照最长长度计算，长度不足的补足空格
+		if len(argument.Name) != a.maxFieldLength {
+			a.arguments[i].Name += strings.Repeat(" ", a.maxFieldLength-len(argument.Name))
+		}
+
+		if len(argument.Type) != a.maxTypeLength {
+			a.arguments[i].Type += strings.Repeat(" ", a.maxTypeLength-len(argument.Type))
+		}
+	}
+}
 
 func FilterFunc(file *ast.File, fileSet *token.FileSet, source string, funcNames ...string) {
 	ast.Inspect(file, func(x ast.Node) bool {
-		f, ok := x.(*ast.FuncType)
+		f, ok := x.(*ast.FuncType) // 如果不是函数类型，那么查看子节点
 		if !ok {
 			return true
 		}
-
+		// 方法类型继续处理
 		commentMap := ast.NewCommentMap(fileSet, file, file.Comments)
 
-		if int(f.Pos())+len("func") < int(f.Params.Opening)-1 {
+		if int(f.Pos())+len(funcKeyWord) < int(f.Params.Opening)-1 {
 			ft := Func{
-				FuncName:  source[int(f.Pos())+len("func") : f.Params.Opening-1],
+				FuncName:  source[int(f.Pos())+len(funcKeyWord) : f.Params.Opening-1],
 				Arguments: processArguments(f.Params.List, source),
 				Comments:  len(commentMap[f]) != 0,
 			}
@@ -128,7 +166,7 @@ func FilterFunc(file *ast.File, fileSet *token.FileSet, source string, funcNames
 	})
 }
 
-func processArguments(fields []*ast.Field, source string) []Argument {
+func processArguments(fields []*ast.Field, source string) Arguments {
 	arguments := make([]Argument, 0, len(fields))
 	maxFieldLength := 0
 	maxTypeLength := 0
@@ -166,15 +204,9 @@ func processArguments(fields []*ast.Field, source string) []Argument {
 		}
 	}
 
-	for i, argument := range arguments {
-		if len(argument.Name) != maxFieldLength {
-			arguments[i].Name += strings.Repeat(" ", maxFieldLength-len(argument.Name))
-		}
-
-		if len(argument.Type) != maxTypeLength {
-			arguments[i].Type += strings.Repeat(" ", maxTypeLength-len(argument.Type))
-		}
+	return Arguments{
+		arguments:      arguments,
+		maxTypeLength:  maxTypeLength,
+		maxFieldLength: maxFieldLength,
 	}
-
-	return arguments
 }
